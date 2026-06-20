@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  LLVM_VERSION: "21"
+
+jobs:
+  format:
+    name: Format check (LLVM 21)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install LLVM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg ca-certificates lsb-release
+          wget -O llvm.sh https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh "${LLVM_VERSION}"
+          sudo apt-get install -y "clang-format-${LLVM_VERSION}"
+
+      - name: Check C++ formatting
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import subprocess
+
+          clang_format = f"clang-format-{os.environ['LLVM_VERSION']}"
+          files = []
+          for root in (Path('include'), Path('src'), Path('tests')):
+              if not root.exists():
+                  continue
+              for suffix in ('*.cc', '*.hpp', '*.h'):
+                  files.extend(str(path) for path in root.rglob(suffix))
+
+          if files:
+              subprocess.check_call([clang_format, '--dry-run', '--Werror', *sorted(files)])
+          print(f'checked {len(files)} files')
+          PY
+
+  build:
+    name: Build and test (LLVM 21)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install LLVM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg ca-certificates lsb-release cmake ninja-build
+          wget -O llvm.sh https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh "${LLVM_VERSION}"
+          sudo apt-get install -y "clang-${LLVM_VERSION}" "lld-${LLVM_VERSION}"
+
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DPRISM_ENABLE_LLVM=OFF
+          -DPRISM_ENABLE_RISCV=OFF
+        env:
+          CC: clang-21
+          CXX: clang++-21
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
